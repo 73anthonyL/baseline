@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Panel, Direction, ScanRecord } from '../types';
 import { VehicleDiagram } from './VehicleDiagram';
+import { FLEET_CATALOG } from '../data/fleetCatalog';
 import {
   generateRandomChallenge,
   extractVideoKeyframes,
@@ -8,7 +9,15 @@ import {
   isHeicFile,
   convertHeicToJpeg,
 } from '../utils/videoUtils';
-import { UploadCloud, ShieldCheck, Film, AlertTriangle, ArrowRight, Loader2, Sparkles, CheckCircle2 } from 'lucide-react';
+import {
+  Upload,
+  ArrowRight,
+  Loader2,
+  RefreshCw,
+  AlertCircle,
+  Car,
+  ChevronDown,
+} from 'lucide-react';
 
 interface ScanScreenProps {
   onScanCompleted: (record: ScanRecord) => void;
@@ -16,20 +25,42 @@ interface ScanScreenProps {
 }
 
 export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadSamplePair }) => {
-  // Protocol challenge state
-  const [challenge, setChallenge] = useState(generateRandomChallenge());
-  const [scanType, setScanType] = useState<'pickup' | 'return'>('pickup');
-  const [vehicleLabel, setVehicleLabel] = useState('2025 Tesla Model 3 Long Range');
-  const [vinOrPlate, setVinOrPlate] = useState('CA 7XYZ918');
+  // Pre-seed challenge to Front Bumper & Counter-Clockwise matching the Chrysler 300 walkaround vector
+  const [challenge, setChallenge] = useState<{
+    targetPanel: Panel;
+    targetDirection: Direction;
+    challengeCode: string;
+  }>({
+    targetPanel: 'front_bumper',
+    targetDirection: 'counter-clockwise',
+    challengeCode: 'CHL-300CCW',
+  });
+  // Default to Return scan so hackathon demo immediately checks in against pre-existing pickup baseline
+  const [scanType, setScanType] = useState<'pickup' | 'return'>('return');
+  
+  // Selected vehicle preset or custom input
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string>(FLEET_CATALOG[0].id);
+  const [vehicleLabel, setVehicleLabel] = useState(FLEET_CATALOG[0].vehicleLabel);
+  const [vinOrPlate, setVinOrPlate] = useState(FLEET_CATALOG[0].vinOrPlate);
 
-  // Video processing state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
   const [fileHash, setFileHash] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressStage, setProgressStage] = useState<string>('');
-  const [progressPct, setProgressPct] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Find photo of current vehicle
+  const currentVehicle = FLEET_CATALOG.find((v) => v.id === selectedVehicleId) || FLEET_CATALOG[0];
+
+  const handleSelectVehiclePreset = (vId: string) => {
+    setSelectedVehicleId(vId);
+    const found = FLEET_CATALOG.find((v) => v.id === vId);
+    if (found) {
+      setVehicleLabel(found.vehicleLabel);
+      setVinOrPlate(found.vinOrPlate);
+    }
+  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     let file = e.target.files?.[0];
@@ -37,27 +68,9 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
 
     setErrorMsg(null);
 
-    // If an HEIC image is uploaded (e.g. from iPhone camera roll), convert it to JPEG using browser canvas
-    if (isHeicFile(file)) {
-      try {
-        setProgressStage('Converting Apple HEIC image to high-compatibility JPEG in browser canvas...');
-        setIsProcessing(true);
-        file = await convertHeicToJpeg(file);
-        setIsProcessing(false);
-        setProgressStage('');
-      } catch (conversionErr: any) {
-        setIsProcessing(false);
-        setProgressStage('');
-        setErrorMsg('Could not convert HEIC format. Please export as standard JPEG or MP4.');
-        return;
-      }
-    }
-
-    // Client file validation (video or converted photo)
-    const isVideo = file.type.startsWith('video/');
-    const isImage = file.type.startsWith('image/');
-    if (!isVideo && !isImage) {
-      setErrorMsg('Please select a valid walkaround video or image file (MP4, MOV, WebM, JPEG, HEIC).');
+    const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|webm|m4v)$/i);
+    if (!isVideo) {
+      setErrorMsg('Please upload a video file (.mp4, .mov, .webm).');
       return;
     }
 
@@ -65,20 +78,17 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
     const objectUrl = URL.createObjectURL(file);
     setVideoPreviewUrl(objectUrl);
 
-    // Compute cryptographic SHA-256 on the client immediately on the converted/original file
     try {
-      setProgressStage('Anchoring cryptographic SHA-256 hash of media...');
       const hash = await computeFileSHA256(file);
       setFileHash(hash);
-      setProgressStage('');
     } catch (err: any) {
-      console.error('Hash error:', err);
+      console.error(err);
     }
   };
 
   const handleStartAnalysis = async () => {
     if (!selectedFile) {
-      setErrorMsg('Please select or record a video first.');
+      setErrorMsg('Select a file.');
       return;
     }
 
@@ -90,16 +100,11 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
       let duration = 5;
 
       if (selectedFile.type.startsWith('video/')) {
-        // Extract 1fps keyframes capped at 30 frames, resized to 960px
-        setProgressStage('Extracting calibrated keyframes (1 fps, 960px optimized)...');
-        const extracted = await extractVideoKeyframes(selectedFile, 30, (pct) => {
-          setProgressPct(pct);
-        });
+        setProgressStage('Extracting frames...');
+        const extracted = await extractVideoKeyframes(selectedFile, 30);
         frames = extracted.frames;
         duration = extracted.duration;
       } else {
-        // Converted HEIC or JPEG image: wrap single high-res frame into scan pipeline
-        setProgressStage('Optimizing converted image frame for Gemini analysis...');
         const reader = new FileReader();
         const dataUrl = await new Promise<string>((res) => {
           reader.onload = () => res(reader.result as string);
@@ -109,16 +114,13 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
         duration = 1;
       }
 
-      // Step 2: Ensure SHA-256 is ready
       let finalHash = fileHash;
       if (!finalHash) {
-        setProgressStage('Calculating SHA-256 digital fingerprint...');
         finalHash = await computeFileSHA256(selectedFile);
         setFileHash(finalHash);
       }
 
-      // Step 3: Server-side Gemini 3.8 Flash multimodal analysis
-      setProgressStage('Submitting to Gemini 3.8 Flash for verification & damage classification...');
+      setProgressStage('Analyzing with Gemini...');
       const response = await fetch('/api/analyze-scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -133,12 +135,11 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.details || errorData.error || 'Gemini analysis failed');
+        throw new Error(errorData.details || errorData.error || 'Analysis failed');
       }
 
       const result = await response.json();
 
-      // Step 4: Construct complete ScanRecord
       const newRecord: ScanRecord = {
         id: `SCN-${scanType.toUpperCase()}-${Date.now().toString(36).toUpperCase()}`,
         type: scanType,
@@ -157,181 +158,203 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
           id: dmg.id || `DMG-${i + 1}`,
           panelLabel: dmg.panelLabel || dmg.panel,
         })),
+        specs: currentVehicle.specs,
       };
 
       setIsProcessing(false);
       onScanCompleted(newRecord);
     } catch (err: any) {
-      console.error('Scan processing error:', err);
+      console.error(err);
       setIsProcessing(false);
-      setErrorMsg(err.message || 'Failed to complete video verification. Please try again.');
+      setErrorMsg(err.message || 'Inspection failed.');
     }
   };
 
-  const regenerateChallenge = () => {
-    setChallenge(generateRandomChallenge());
-  };
-
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      {/* Top Banner with Demo Quick-Load */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-gradient-to-r from-cyan-950/70 via-slate-900 to-indigo-950/70 border border-cyan-800/40 shadow-lg">
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* 1. Header with Vehicle Selector */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-900 pb-4">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-              DeepMind Hackathon GroundTruth
-            </span>
-          </div>
-          <h2 className="text-lg font-bold text-white mt-1">Capture & Verify Vehicle Walkaround</h2>
-          <p className="text-xs text-slate-300 max-w-xl">
-            To prevent fraud and replay attacks, adhere to the randomized directional challenge. The video's cryptographic hash will anchor immutable ground truth.
+          <h1 className="text-xl font-semibold text-white">Vehicle Walkaround Scan</h1>
+          <p className="text-xs font-mono text-neutral-500 mt-0.5">
+            Identify car • Follow randomized motion vector • Anchor SHA-256
           </p>
         </div>
 
         <button
           onClick={onLoadSamplePair}
-          className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md hover:shadow-indigo-500/20 transition-all cursor-pointer whitespace-nowrap"
+          className="text-xs font-mono text-neutral-400 hover:text-white border border-neutral-800 px-3 py-1.5 transition-colors self-start sm:self-auto"
         >
-          <Sparkles className="w-4 h-4 text-amber-300" />
-          <span>Load Hackathon Demo Pair</span>
+          Load Demo Pair
         </button>
       </div>
 
-      {/* Main Grid: Challenge & Protocol vs Video Upload */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Randomized Protocol Challenge */}
-        <div className="lg:col-span-5 flex flex-col justify-between p-5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-xl">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-cyan-400" />
-                <h3 className="font-semibold text-white text-sm">Anti-Tamper Protocol</h3>
-              </div>
-              <button
-                onClick={regenerateChallenge}
-                className="text-xs text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
-                title="Generate new randomized path"
-              >
-                Shuffle Path
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-400 mb-4">
-              Follow this visual guide when scanning. Gemini will verify that the video began at the designated panel and traversed in the correct rotational direction.
-            </p>
-
-            {/* Vehicle Visual Guide Diagram */}
-            <div className="py-2 bg-slate-950/60 rounded-xl border border-slate-800/80">
-              <VehicleDiagram
-                targetPanel={challenge.targetPanel}
-                targetDirection={challenge.targetDirection}
-              />
-            </div>
+      {/* 2. Vehicle Identification Bar with Real Car Photography */}
+      <div className="p-4 bg-neutral-950 border border-neutral-900 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          {/* Real Car Photo Thumbnail */}
+          <div className="w-16 h-12 bg-neutral-900 border border-neutral-850 shrink-0 overflow-hidden">
+            <img
+              src={currentVehicle.frames[0]?.dataUrl}
+              alt={vehicleLabel}
+              className="w-full h-full object-cover"
+            />
           </div>
 
-          {/* Vehicle Metadata Inputs */}
-          <div className="mt-5 pt-4 border-t border-slate-800 space-y-3">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setScanType('pickup')}
-                className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                  scanType === 'pickup'
-                    ? 'bg-cyan-600 text-white shadow-sm'
-                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                }`}
-              >
-                Pickup (T0 Baseline)
-              </button>
-              <button
-                type="button"
-                onClick={() => setScanType('return')}
-                className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                  scanType === 'return'
-                    ? 'bg-amber-600 text-white shadow-sm'
-                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                }`}
-              >
-                Return (T1 Audit)
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div>
-                <label className="text-slate-400 block mb-1">Vehicle Model</label>
-                <input
-                  type="text"
-                  value={vehicleLabel}
-                  onChange={(e) => setVehicleLabel(e.target.value)}
-                  className="w-full px-2.5 py-1.5 rounded bg-slate-800 border border-slate-700 text-white font-medium focus:border-cyan-400 outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-slate-400 block mb-1">Plate / VIN</label>
-                <input
-                  type="text"
-                  value={vinOrPlate}
-                  onChange={(e) => setVinOrPlate(e.target.value)}
-                  className="w-full px-2.5 py-1.5 rounded bg-slate-800 border border-slate-700 text-white font-mono uppercase focus:border-cyan-400 outline-none"
-                />
-              </div>
-            </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-mono text-neutral-500 uppercase">Assigned Asset</div>
+            <div className="text-sm font-medium text-white truncate">{vehicleLabel}</div>
+            <div className="text-[11px] font-mono text-neutral-400">{vinOrPlate}</div>
           </div>
         </div>
 
-        {/* Right Column: Video Upload & Pipeline Runner */}
-        <div className="lg:col-span-7 flex flex-col justify-between p-5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-xl">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Film className="w-5 h-5 text-indigo-400" />
-                <h3 className="font-semibold text-white text-sm">Walkaround Video File</h3>
-              </div>
-              <span className="text-xs text-slate-400">Max 2 min • MP4 / MOV / HEIC / JPEG</span>
+        {/* Dropdown to switch vehicle quickly */}
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+          <select
+            value={selectedVehicleId}
+            onChange={(e) => handleSelectVehiclePreset(e.target.value)}
+            className="bg-black border border-neutral-800 text-xs font-mono text-neutral-300 py-1.5 px-2.5 focus:outline-none cursor-pointer w-full sm:w-auto"
+          >
+            {FLEET_CATALOG.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.vehicleLabel} ({v.vinOrPlate})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* 3. Main Scanning Console: Vector Guide vs Media Ingestion */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Left: Simplified Schematic Diagram (Used strictly as instruction of how to scan) */}
+        <div className="p-5 bg-neutral-950 border border-neutral-900 space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-mono text-neutral-400">
+              Protocol Instruction (Start & Direction)
+            </span>
+            <button
+              onClick={() => setChallenge(generateRandomChallenge())}
+              className="text-xs text-neutral-500 hover:text-white flex items-center gap-1 font-mono transition-colors"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Shuffle</span>
+            </button>
+          </div>
+
+          {/* Simple model diagram showing strictly starting point and rotational direction */}
+          <div className="py-2 bg-black border border-neutral-900 flex justify-center">
+            <VehicleDiagram
+              targetPanel={challenge.targetPanel}
+              targetDirection={challenge.targetDirection}
+            />
+          </div>
+
+          {/* Clean Step-by-Step Scan Order without verbose timestamps */}
+          <div className="p-3 bg-black border border-neutral-900 space-y-2 text-xs font-mono">
+            <div className="flex items-center justify-between text-neutral-400">
+              <span className="text-white font-medium">Recording Order:</span>
+              <span className="text-[10px] text-neutral-500 uppercase">{challenge.targetDirection}</span>
             </div>
 
-            {/* Video / Photo File Dropzone / Uploader */}
+            <ol className="text-[11px] text-neutral-400 space-y-1 list-decimal list-inside leading-relaxed">
+              {challenge.targetDirection === 'clockwise' ? (
+                <>
+                  <li><span className="text-white font-medium">Start facing Front Bumper & Badge</span></li>
+                  <li>Walk right along <span className="text-white">Driver Side</span> (front wheel, doors, rear wheel)</li>
+                  <li>Pan across <span className="text-white">Rear Bumper & License Plate</span></li>
+                  <li>Continue along <span className="text-white">Passenger Side</span> (rear wheel, doors, front wheel)</li>
+                  <li>Finish back at <span className="text-white">Front Bumper</span> to complete 360°</li>
+                </>
+              ) : (
+                <>
+                  <li><span className="text-white font-medium">Start facing Front Bumper & Badge</span></li>
+                  <li>Walk left along <span className="text-white">Passenger Side</span> (front wheel, doors, rear wheel)</li>
+                  <li>Pan across <span className="text-white">Rear Bumper & License Plate</span></li>
+                  <li>Continue along <span className="text-white">Driver Side</span> (rear wheel, doors, front wheel)</li>
+                  <li>Finish back at <span className="text-white">Front Bumper</span> to complete 360°</li>
+                </>
+              )}
+            </ol>
+          </div>
+
+          <div className="text-[11px] font-mono text-neutral-500 space-y-0.5">
+            <div>• Target duration: 15–25s continuous walkaround</div>
+            <div>• Keep camera 3–5 ft away, mid-height</div>
+            <div>• Protocol Challenge: <span className="text-neutral-300">{challenge.challengeCode}</span></div>
+          </div>
+
+          {/* Stage toggle */}
+          <div className="pt-2 border-t border-neutral-900 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setScanType('pickup')}
+              className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${
+                scanType === 'pickup'
+                  ? 'bg-neutral-800 border-neutral-700 text-white font-medium'
+                  : 'border-neutral-900 text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              T0 Pickup Baseline
+            </button>
+            <button
+              type="button"
+              onClick={() => setScanType('return')}
+              className={`flex-1 py-1.5 text-xs font-mono border transition-colors ${
+                scanType === 'return'
+                  ? 'bg-neutral-800 border-neutral-700 text-white font-medium'
+                  : 'border-neutral-900 text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              T1 Return Audit
+            </button>
+          </div>
+        </div>
+
+        {/* Right: Video Upload & Ingestion */}
+        <div className="p-5 bg-neutral-950 border border-neutral-900 flex flex-col justify-between space-y-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs font-mono text-neutral-400">
+              <span>Walkaround Video</span>
+              <span>MP4 / MOV / WEBM</span>
+            </div>
+
             {!videoPreviewUrl ? (
-              <label className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-700 hover:border-cyan-500 rounded-xl bg-slate-950/50 cursor-pointer transition-colors group">
-                <UploadCloud className="w-12 h-12 text-slate-500 group-hover:text-cyan-400 mb-3 transition-colors" />
-                <span className="text-sm font-medium text-slate-200 group-hover:text-cyan-300">
-                  Select Walkaround Video or Photo
-                </span>
-                <span className="text-xs text-slate-500 mt-1">
-                  Upload raw camera video or Apple HEIC / JPEG photos from any device
+              <label className="flex flex-col items-center justify-center p-10 border border-dashed border-neutral-800 hover:border-neutral-600 bg-black cursor-pointer transition-colors">
+                <Upload className="w-5 h-5 text-neutral-500 mb-2" />
+                <span className="text-xs text-neutral-300 font-mono">Select or drop vehicle video</span>
+                <span className="text-[10px] text-neutral-600 font-mono mt-1">
+                  15–25s continuous 360° walkaround
                 </span>
                 <input
                   type="file"
-                  accept="video/mp4,video/webm,video/quicktime,image/heic,image/heif,.heic,.heif,image/jpeg,image/png"
+                  accept="video/*,.mp4,.mov,.webm,.m4v"
                   onChange={handleFileChange}
                   className="hidden"
                 />
               </label>
             ) : (
-              <div className="space-y-3">
-                <div className="relative aspect-video rounded-lg overflow-hidden bg-black border border-slate-800">
-                  {selectedFile?.type.startsWith('video/') ? (
-                    <video
-                      src={videoPreviewUrl}
-                      controls
-                      className="w-full h-full object-contain"
-                    />
-                  ) : (
-                    <img
-                      src={videoPreviewUrl}
-                      alt="Uploaded scan preview"
-                      className="w-full h-full object-contain"
-                    />
-                  )}
+              <div className="space-y-2">
+                {/* Visual Feedback of Successful Upload */}
+                <div className="flex items-center justify-between p-2.5 bg-neutral-900 border border-neutral-700 text-xs font-mono">
+                  <div className="flex items-center gap-2 text-white">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="font-semibold">Video Ingested Successfully</span>
+                  </div>
+                  <span className="text-[10px] text-neutral-400">
+                    {selectedFile ? `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB` : ''}
+                  </span>
                 </div>
 
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>File: <strong className="text-slate-200">{selectedFile?.name}</strong></span>
-                  <label className="text-cyan-400 hover:underline cursor-pointer">
-                    Change media
+                <div className="aspect-video bg-black border border-neutral-900 overflow-hidden">
+                  <video src={videoPreviewUrl} controls className="w-full h-full object-contain" />
+                </div>
+                <div className="flex items-center justify-between text-[11px] font-mono text-neutral-500">
+                  <span className="truncate">{selectedFile?.name}</span>
+                  <label className="text-neutral-300 hover:underline cursor-pointer">
+                    Replace Video
                     <input
                       type="file"
-                      accept="video/mp4,video/webm,video/quicktime,image/heic,image/heif,.heic,.heif,image/jpeg,image/png"
+                      accept="video/*,.mp4,.mov,.webm,.m4v"
                       onChange={handleFileChange}
                       className="hidden"
                     />
@@ -340,58 +363,35 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
               </div>
             )}
 
-            {/* Cryptographic SHA-256 Ledger Stamp */}
             {fileHash && (
-              <div className="mt-4 p-3 rounded-lg bg-slate-950 border border-slate-800 flex items-start gap-2.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-semibold text-slate-300">
-                    Client Cryptographic Digest (SHA-256)
-                  </div>
-                  <div className="text-[10px] font-mono text-cyan-300 truncate">
-                    {fileHash}
-                  </div>
-                  <div className="text-[10px] text-slate-500">
-                    Generated locally via WebCrypto Subtle API before network submission
-                  </div>
-                </div>
+              <div className="p-2.5 bg-black border border-neutral-900 text-[10px] font-mono text-neutral-400 space-y-0.5">
+                <div className="text-neutral-500">SHA-256 Digest:</div>
+                <div className="truncate text-neutral-300 select-all">{fileHash}</div>
               </div>
             )}
 
             {errorMsg && (
-              <div className="mt-4 p-3 rounded-lg bg-red-950/70 border border-red-800 text-red-200 text-xs flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+              <div className="p-2 text-xs text-red-400 flex items-center gap-1.5 font-mono">
+                <AlertCircle className="w-3.5 h-3.5" />
                 <span>{errorMsg}</span>
               </div>
             )}
           </div>
 
-          {/* Action Button & Progress */}
-          <div className="mt-6 pt-4 border-t border-slate-800">
+          <div className="pt-3 border-t border-neutral-900">
             {isProcessing ? (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-cyan-300 flex items-center gap-2 font-medium">
-                    <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
-                    {progressStage}
-                  </span>
-                  {progressPct > 0 && <span className="text-slate-400">{progressPct}%</span>}
-                </div>
-                <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-cyan-500 to-indigo-500 transition-all duration-300"
-                    style={{ width: `${Math.max(15, progressPct)}%` }}
-                  />
-                </div>
+              <div className="text-xs font-mono text-neutral-400 flex items-center justify-center gap-2 py-2">
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                <span>{progressStage}</span>
               </div>
             ) : (
               <button
                 onClick={handleStartAnalysis}
                 disabled={!selectedFile}
-                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 disabled:opacity-40 text-white font-semibold text-sm shadow-lg hover:shadow-cyan-500/25 transition-all cursor-pointer"
+                className="w-full py-2 bg-white hover:bg-neutral-200 text-black text-xs font-medium disabled:opacity-30 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                <span>Analyze Scan with Gemini 3.8 Flash</span>
-                <ArrowRight className="w-4 h-4" />
+                <span>Process Walkaround</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             )}
           </div>

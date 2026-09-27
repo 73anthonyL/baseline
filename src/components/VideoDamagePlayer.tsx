@@ -1,12 +1,13 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { DamageItem, VideoFrame } from '../types';
-import { Play, Pause, RotateCcw, Crosshair, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
+import { Play, Pause, RotateCcw, Crosshair, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface VideoDamagePlayerProps {
   videoUrl?: string;
   frames?: VideoFrame[];
   damages: DamageItem[];
   selectedDamageId?: string;
+  seekTimestamp?: number;
   onSelectDamage?: (damage: DamageItem) => void;
   title?: string;
   badgeText?: string;
@@ -17,6 +18,7 @@ export const VideoDamagePlayer: React.FC<VideoDamagePlayerProps> = ({
   frames = [],
   damages,
   selectedDamageId,
+  seekTimestamp,
   onSelectDamage,
   title,
   badgeText,
@@ -30,6 +32,20 @@ export const VideoDamagePlayer: React.FC<VideoDamagePlayerProps> = ({
 
   // Find active damage if any
   const activeDamage = damages.find((d) => d.id === selectedDamageId);
+
+  // Sync viewMode if videoUrl changes
+  useEffect(() => {
+    if (videoUrl) {
+      setViewMode('video');
+    }
+  }, [videoUrl]);
+
+  // Sync external seekTimestamp (e.g. from selecting a vehicle panel or frame)
+  useEffect(() => {
+    if (typeof seekTimestamp === 'number' && seekTimestamp >= 0) {
+      seekTo(seekTimestamp);
+    }
+  }, [seekTimestamp]);
 
   // Sync when selectedDamage changes externally
   useEffect(() => {
@@ -57,7 +73,18 @@ export const VideoDamagePlayer: React.FC<VideoDamagePlayerProps> = ({
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
+      const time = videoRef.current.currentTime;
+      setCurrentTime(time);
+
+      // Auto-sync frame index to current time
+      if (frames.length > 0) {
+        const closestIdx = frames.reduce((prevIdx, curr, currIdx) => {
+          return Math.abs(curr.timestamp_seconds - time) < Math.abs(frames[prevIdx].timestamp_seconds - time)
+            ? currIdx
+            : prevIdx;
+        }, 0);
+        setSelectedFrameIndex(closestIdx);
+      }
     }
   };
 
@@ -72,7 +99,6 @@ export const VideoDamagePlayer: React.FC<VideoDamagePlayerProps> = ({
       videoRef.current.currentTime = sec;
       setCurrentTime(sec);
     }
-    // Also sync closest keyframe
     if (frames.length > 0) {
       const closestIdx = frames.reduce((prevIdx, curr, currIdx) => {
         return Math.abs(curr.timestamp_seconds - sec) < Math.abs(frames[prevIdx].timestamp_seconds - sec)
@@ -83,7 +109,6 @@ export const VideoDamagePlayer: React.FC<VideoDamagePlayerProps> = ({
     }
   };
 
-  // Convert normalized box [ymin, xmin, ymax, xmax] (0..1000) to CSS percentages
   const getBoxStyle = (box_2d: [number, number, number, number]) => {
     const [ymin, xmin, ymax, xmax] = box_2d;
     return {
@@ -95,42 +120,42 @@ export const VideoDamagePlayer: React.FC<VideoDamagePlayerProps> = ({
   };
 
   return (
-    <div className="flex flex-col rounded-xl overflow-hidden bg-slate-900 border border-slate-800 shadow-xl">
+    <div className="flex flex-col bg-neutral-950 border border-neutral-900 font-mono text-xs">
       {/* Header bar */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-950 border-b border-slate-800/80">
+      <div className="flex items-center justify-between px-3.5 py-2 border-b border-neutral-900 bg-black">
         <div className="flex items-center gap-2">
-          {title && <span className="font-semibold text-sm text-slate-100">{title}</span>}
+          {title && <span className="font-semibold text-white">{title}</span>}
           {badgeText && (
-            <span className="px-2 py-0.5 rounded text-[11px] font-mono uppercase bg-slate-800 text-cyan-400 border border-slate-700">
+            <span className="px-1.5 py-0.5 text-[10px] uppercase bg-neutral-900 text-neutral-300 border border-neutral-800">
               {badgeText}
             </span>
           )}
         </div>
 
-        {/* Toggle between Video stream and Keyframe inspector if video exists */}
-        {videoUrl && frames.length > 0 && (
-          <div className="flex items-center bg-slate-900 rounded-lg p-0.5 border border-slate-800 text-xs">
+        {/* View Mode Toggle */}
+        <div className="flex items-center border border-neutral-800 text-[11px]">
+          {videoUrl && (
             <button
               onClick={() => setViewMode('video')}
-              className={`px-2.5 py-1 rounded transition-colors ${
-                viewMode === 'video' ? 'bg-cyan-600 text-white font-medium' : 'text-slate-400 hover:text-slate-200'
+              className={`px-2.5 py-0.5 transition-colors ${
+                viewMode === 'video' ? 'bg-neutral-800 text-white font-medium' : 'text-neutral-500 hover:text-neutral-300'
               }`}
             >
-              Video Player
+              Watch Video
             </button>
-            <button
-              onClick={() => setViewMode('keyframes')}
-              className={`px-2.5 py-1 rounded transition-colors ${
-                viewMode === 'keyframes' ? 'bg-cyan-600 text-white font-medium' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Keyframes ({frames.length})
-            </button>
-          </div>
-        )}
+          )}
+          <button
+            onClick={() => setViewMode('keyframes')}
+            className={`px-2.5 py-0.5 transition-colors ${
+              viewMode === 'keyframes' ? 'bg-neutral-800 text-white font-medium' : 'text-neutral-500 hover:text-neutral-300'
+            }`}
+          >
+            Keyframes ({frames.length})
+          </button>
+        </div>
       </div>
 
-      {/* Main viewport */}
+      {/* Main Viewport */}
       <div className="relative aspect-video w-full bg-black flex items-center justify-center overflow-hidden">
         {viewMode === 'video' && videoUrl ? (
           <div className="relative w-full h-full">
@@ -140,17 +165,18 @@ export const VideoDamagePlayer: React.FC<VideoDamagePlayerProps> = ({
               className="w-full h-full object-contain"
               onTimeUpdate={handleTimeUpdate}
               onLoadedMetadata={handleLoadedMetadata}
+              onEnded={() => setIsPlaying(false)}
               playsInline
               onClick={togglePlay}
             />
 
-            {/* Damage Bounding Box Overlay on Video if active and matches current time window */}
-            {activeDamage && Math.abs(currentTime - activeDamage.timestamp_seconds) < 2.5 && (
+            {/* Damage Overlay */}
+            {activeDamage && Math.abs(currentTime - activeDamage.timestamp_seconds) < 2.0 && (
               <div
-                className="absolute border-2 border-red-500 bg-red-500/20 rounded pointer-events-none transition-all duration-150 animate-pulse"
+                className="absolute border border-white bg-white/10 pointer-events-none"
                 style={getBoxStyle(activeDamage.box_2d)}
               >
-                <div className="absolute -top-7 left-0 px-2 py-0.5 bg-red-600 text-white text-[10px] font-bold rounded shadow-md whitespace-nowrap">
+                <div className="absolute -top-5 left-0 px-1 py-0.5 bg-black text-white text-[9px] uppercase border border-neutral-700 whitespace-nowrap">
                   {activeDamage.panelLabel}: {activeDamage.type.replace('_', ' ')}
                 </div>
               </div>
@@ -164,52 +190,49 @@ export const VideoDamagePlayer: React.FC<VideoDamagePlayerProps> = ({
               className="w-full h-full object-contain"
             />
 
-            {/* Damage Bounding Box on Keyframe */}
+            {/* Damage Overlay */}
             {activeDamage && activeDamage.frame_index === selectedFrameIndex && (
               <div
-                className="absolute border-2 border-red-500 bg-red-500/25 rounded pointer-events-none shadow-[0_0_15px_rgba(239,68,68,0.7)]"
+                className="absolute border border-white bg-white/10 pointer-events-none"
                 style={getBoxStyle(activeDamage.box_2d)}
               >
-                <div className="absolute -top-7 left-0 flex items-center gap-1.5 px-2 py-0.5 bg-red-600 text-white text-[11px] font-bold rounded shadow-lg whitespace-nowrap">
-                  <Crosshair className="w-3 h-3" />
+                <div className="absolute -top-5 left-0 flex items-center gap-1 px-1.5 py-0.5 bg-black text-white text-[9px] uppercase border border-neutral-700 whitespace-nowrap">
+                  <Crosshair className="w-2.5 h-2.5" />
                   <span>{activeDamage.panelLabel}</span>
-                  <span className="opacity-80 text-[9px] uppercase font-normal">
-                    ({Math.round(activeDamage.confidence * 100)}% conf)
+                  <span className="text-neutral-500">
+                    ({Math.round(activeDamage.confidence * 100)}%)
                   </span>
                 </div>
               </div>
             )}
 
-            {/* Frame metadata tag */}
-            <div className="absolute bottom-2 left-2 px-2 py-1 bg-black/70 backdrop-blur rounded text-[11px] font-mono text-slate-300">
+            <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/80 border border-neutral-800 text-[10px] text-neutral-400">
               Frame #{selectedFrameIndex + 1}/{frames.length} • {frames[selectedFrameIndex]?.timestamp_seconds}s
             </div>
           </div>
         ) : (
-          <div className="text-slate-500 text-sm flex flex-col items-center">
-            <Eye className="w-8 h-8 mb-2 opacity-40" />
+          <div className="text-neutral-600 text-xs font-mono">
             No video playback source available
           </div>
         )}
       </div>
 
       {/* Scrubber & Controls */}
-      <div className="p-3 bg-slate-950/90 border-t border-slate-800">
+      <div className="p-2.5 bg-black border-t border-neutral-900 space-y-2">
         {viewMode === 'video' && videoUrl ? (
-          <div className="flex flex-col gap-2">
-            {/* Timeline with damage ticks */}
+          <div className="space-y-1.5">
+            {/* Range Scrubber */}
             <div className="relative w-full flex items-center">
               <input
                 type="range"
                 min="0"
                 max={duration || 1}
-                step="0.1"
+                step="0.05"
                 value={currentTime}
                 onChange={(e) => seekTo(parseFloat(e.target.value))}
-                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                className="w-full h-1 bg-neutral-800 appearance-none cursor-pointer accent-white"
               />
 
-              {/* Damage timeline tick pins */}
               {damages.map((dmg) => {
                 const leftPct = duration > 0 ? (dmg.timestamp_seconds / duration) * 100 : 0;
                 const isSelected = dmg.id === selectedDamageId;
@@ -222,86 +245,89 @@ export const VideoDamagePlayer: React.FC<VideoDamagePlayerProps> = ({
                       if (onSelectDamage) onSelectDamage(dmg);
                     }}
                     style={{ left: `${Math.min(98, Math.max(2, leftPct))}%` }}
-                    className={`absolute -top-1.5 w-3.5 h-3.5 -ml-1.5 rounded-full border-2 transition-transform ${
+                    className={`absolute -top-1 w-2.5 h-2.5 -ml-1 border transition-transform ${
                       isSelected
-                        ? 'bg-red-500 border-white scale-125 z-10'
-                        : 'bg-amber-400 border-slate-900 hover:scale-110'
+                        ? 'bg-white border-neutral-400 scale-125 z-10'
+                        : 'bg-neutral-500 border-black hover:scale-110'
                     }`}
                   />
                 );
               })}
             </div>
 
-            {/* Play / Pause & Timestamp row */}
-            <div className="flex items-center justify-between text-xs text-slate-400">
+            {/* Play Button & Time Display */}
+            <div className="flex items-center justify-between text-[11px] text-neutral-400">
               <div className="flex items-center gap-2">
                 <button
                   onClick={togglePlay}
-                  className="p-1.5 rounded bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors"
+                  className="px-2 py-0.5 border border-neutral-800 hover:border-neutral-600 text-white transition-colors"
                 >
-                  {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                  {isPlaying ? 'Pause' : 'Play'}
                 </button>
                 <button
                   onClick={() => seekTo(0)}
-                  className="p-1.5 rounded bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors"
-                  title="Rewind to start"
+                  className="px-2 py-0.5 border border-neutral-800 hover:border-neutral-600 text-neutral-400 hover:text-white transition-colors"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
+                  Rewind
                 </button>
-                <span className="font-mono text-slate-300">
-                  {currentTime.toFixed(1)}s / {duration.toFixed(1)}s
-                </span>
               </div>
 
-              <div className="text-[11px] text-slate-400">
-                {damages.length} damage {damages.length === 1 ? 'flag' : 'flags'} localized
+              <div>
+                {currentTime.toFixed(1)}s / {duration.toFixed(1)}s
               </div>
             </div>
           </div>
-        ) : frames.length > 0 ? (
+        ) : (
           /* Keyframe Stepper Controls */
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[11px] text-neutral-400">
               <button
                 disabled={selectedFrameIndex === 0}
-                onClick={() => setSelectedFrameIndex((prev) => Math.max(0, prev - 1))}
-                className="p-1.5 rounded bg-slate-800 text-slate-200 hover:bg-slate-700 disabled:opacity-40"
+                onClick={() => setSelectedFrameIndex(Math.max(0, selectedFrameIndex - 1))}
+                className="px-2 py-0.5 border border-neutral-800 hover:border-neutral-600 disabled:opacity-30 text-white"
               >
-                <ChevronLeft className="w-4 h-4" />
+                ← Prev Frame
               </button>
-              <button
-                disabled={selectedFrameIndex === frames.length - 1}
-                onClick={() => setSelectedFrameIndex((prev) => Math.min(frames.length - 1, prev + 1))}
-                className="p-1.5 rounded bg-slate-800 text-slate-200 hover:bg-slate-700 disabled:opacity-40"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-              <span className="text-xs text-slate-300 font-mono ml-2">
+
+              <span className="text-neutral-400">
                 Frame {selectedFrameIndex + 1} of {frames.length} ({frames[selectedFrameIndex]?.timestamp_seconds}s)
               </span>
+
+              <button
+                disabled={selectedFrameIndex >= frames.length - 1}
+                onClick={() => setSelectedFrameIndex(Math.min(frames.length - 1, selectedFrameIndex + 1))}
+                className="px-2 py-0.5 border border-neutral-800 hover:border-neutral-600 disabled:opacity-30 text-white"
+              >
+                Next Frame →
+              </button>
             </div>
 
-            {/* Quick jump to damaged frames */}
-            <div className="flex items-center gap-1">
-              {damages.map((dmg, idx) => (
-                <button
-                  key={dmg.id}
-                  onClick={() => {
-                    setSelectedFrameIndex(dmg.frame_index < frames.length ? dmg.frame_index : 0);
-                    if (onSelectDamage) onSelectDamage(dmg);
-                  }}
-                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-                    selectedDamageId === dmg.id
-                      ? 'bg-red-600 text-white'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  Damage #{idx + 1}
-                </button>
-              ))}
-            </div>
+            {/* Thumbnail Filmstrip */}
+            {frames.length > 0 && (
+              <div className="flex items-center gap-1.5 overflow-x-auto py-1">
+                {frames.map((f, i) => {
+                  const hasDamage = damages.some((d) => d.frame_index === i);
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setSelectedFrameIndex(i)}
+                      className={`relative shrink-0 w-12 h-8 border overflow-hidden transition-all ${
+                        selectedFrameIndex === i
+                          ? 'border-white'
+                          : 'border-neutral-800 opacity-60 hover:opacity-100'
+                      }`}
+                    >
+                      <img src={f.dataUrl} alt={`Thumb ${i}`} className="w-full h-full object-cover" />
+                      {hasDamage && (
+                        <div className="absolute top-0 right-0 w-2 h-2 bg-white" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        ) : null}
+        )}
       </div>
     </div>
   );

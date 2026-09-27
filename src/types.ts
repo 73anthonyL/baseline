@@ -110,6 +110,20 @@ export interface VideoFrame {
   dataUrl: string; // base64 JPEG resized
 }
 
+export interface VehicleSpecs {
+  year: number;
+  make: string;
+  model: string;
+  trim: string;
+  category: 'Sedan' | 'SUV' | 'EV / Tech' | 'Sports' | 'Truck';
+  odometerMiles: number;
+  fuelOrBattery: string;
+  rentalDailyRate: number;
+  locationCity: string;
+  fleetProvider: string;
+  conditionGrade: 'Pristine A+' | 'Verified Grade A' | 'Flagged Disputed' | 'Inspection Required';
+}
+
 export interface ScanRecord {
   id: string;
   type: 'pickup' | 'return';
@@ -124,6 +138,7 @@ export interface ScanRecord {
   frames: VideoFrame[];
   verification: VerificationResult;
   damages: DamageItem[];
+  specs?: VehicleSpecs;
 }
 
 export type Verdict = 'new_since_pickup' | 'pre_existing' | 'uncertain';

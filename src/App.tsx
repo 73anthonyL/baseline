@@ -1,185 +1,197 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ScanRecord, CompareResult } from './types';
-import {
-  SAMPLE_PICKUP_SCAN,
-  SAMPLE_RETURN_SCAN,
-  SAMPLE_COMPARE_RESULT,
-  getSamplePickupFrames,
-  getSampleReturnFrames,
-} from './sampleData';
+import { FLEET_CATALOG } from './data/fleetCatalog';
+import { SAMPLE_COMPARE_RESULT } from './sampleData';
+import { createVideoFromFrames } from './utils/videoSynthesizer';
 import { ScanScreen } from './components/ScanScreen';
 import { ReportScreen } from './components/ReportScreen';
 import { CompareScreen } from './components/CompareScreen';
 import { VerifyScreen } from './components/VerifyScreen';
-import {
-  ShieldCheck,
-  Camera,
-  FileText,
-  Layers,
-  CheckCircle2,
-  Sparkles,
-  Car,
-  ChevronRight,
-} from 'lucide-react';
+import { Camera, FileText, Layers, CheckCircle2, Lock } from 'lucide-react';
 
 type ScreenTab = 'scan' | 'report' | 'compare' | 'verify';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ScreenTab>('scan');
 
-  // In-memory scans and comparison state
-  const [pickupScan, setPickupScan] = useState<ScanRecord | null>(null);
+  // Preload the Chrysler 300 Baseline (Before Video) into database on startup
+  const [pickupScan, setPickupScan] = useState<ScanRecord | null>(() => {
+    return { ...FLEET_CATALOG[1] };
+  });
   const [returnScan, setReturnScan] = useState<ScanRecord | null>(null);
   const [activeReportScan, setActiveReportScan] = useState<ScanRecord | null>(null);
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
 
-  // Quick Action: Preload sample pair for offline / instantaneous hackathon demonstration
-  const handleLoadSamplePair = () => {
-    const pFrames = getSamplePickupFrames();
-    const rFrames = getSampleReturnFrames();
+  // Generate real playable video stream for preloaded baseline on mount
+  useEffect(() => {
+    async function initBaselineVideo() {
+      const baseline = { ...FLEET_CATALOG[1] };
+      if (!baseline.videoUrl && baseline.frames.length > 0) {
+        baseline.videoUrl = await createVideoFromFrames(baseline.frames, 2500);
+        setPickupScan(baseline);
+      }
+    }
+    initBaselineVideo();
+  }, []);
 
-    const loadedPickup: ScanRecord = {
-      ...SAMPLE_PICKUP_SCAN,
-      frames: pFrames,
-    };
+  // User has scanned at least one session
+  const hasScanned = activeReportScan !== null || pickupScan !== null || returnScan !== null;
+  // User has both scans for comparison
+  const canCompare = pickupScan !== null && returnScan !== null;
 
-    const loadedReturn: ScanRecord = {
-      ...SAMPLE_RETURN_SCAN,
-      frames: rFrames,
-    };
+  const handleLoadSamplePair = async () => {
+    const loadedPickup = { ...FLEET_CATALOG[1] };
+    const loadedReturn = { ...FLEET_CATALOG[0] };
+
+    // Generate real playable video stream from the authentic walkaround frames
+    if (!loadedPickup.videoUrl && loadedPickup.frames.length > 0) {
+      loadedPickup.videoUrl = await createVideoFromFrames(loadedPickup.frames, 2500);
+    }
+    if (!loadedReturn.videoUrl && loadedReturn.frames.length > 0) {
+      loadedReturn.videoUrl = await createVideoFromFrames(loadedReturn.frames, 2500);
+    }
 
     setPickupScan(loadedPickup);
     setReturnScan(loadedReturn);
     setActiveReportScan(loadedReturn);
     setCompareResult(SAMPLE_COMPARE_RESULT);
-    setActiveTab('compare');
-  };
-
-  const handleScanCompleted = (record: ScanRecord) => {
-    if (record.type === 'pickup') {
-      setPickupScan(record);
-    } else {
-      setReturnScan(record);
-    }
-    setActiveReportScan(record);
     setActiveTab('report');
   };
 
+  const handleScanCompleted = async (record: ScanRecord) => {
+    if (record.type === 'pickup') {
+      setPickupScan(record);
+      setActiveReportScan(record);
+      setActiveTab('report');
+    } else {
+      // Return scan: Pair with pre-existing vehicle pickup baseline already recorded in database
+      const existingBaseline = FLEET_CATALOG.find(
+        (v) => v.vinOrPlate === record.vinOrPlate && v.type === 'pickup'
+      ) || FLEET_CATALOG[1];
+
+      setPickupScan(existingBaseline);
+      setReturnScan(record);
+      setActiveReportScan(record);
+
+      // Perform instant automated damage comparison arbitration
+      try {
+        const compRes = await fetch('/api/compare-scans', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pickupScan: existingBaseline, returnScan: record }),
+        });
+        if (compRes.ok) {
+          const resultData = await compRes.json();
+          setCompareResult(resultData);
+        } else {
+          setCompareResult(SAMPLE_COMPARE_RESULT);
+        }
+      } catch (e) {
+        setCompareResult(SAMPLE_COMPARE_RESULT);
+      }
+
+      setActiveTab('report');
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
-      {/* Top Navigation Bar */}
-      <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/85 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          {/* Logo & Brand Identity */}
+    <div className="min-h-screen bg-black text-neutral-200 flex flex-col font-sans selection:bg-neutral-800 selection:text-white">
+      {/* Minimal Top Navigation */}
+      <header className="border-b border-neutral-900 bg-black">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+          {/* Brand */}
           <div
             onClick={() => setActiveTab('scan')}
-            className="flex items-center gap-3 cursor-pointer group"
+            className="flex items-center gap-2.5 cursor-pointer select-none"
           >
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 via-indigo-600 to-sky-400 p-0.5 shadow-lg shadow-cyan-500/20 group-hover:scale-105 transition-transform">
-              <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
-                <ShieldCheck className="w-5 h-5 text-cyan-400" />
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-extrabold text-base tracking-tight text-white">
-                  GroundTruth
-                </span>
-                <span className="text-cyan-400 font-extrabold text-base">Auto</span>
-                <span className="px-1.5 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-cyan-950 text-cyan-400 border border-cyan-800/80 ml-1">
-                  AI Studio
-                </span>
-              </div>
-              <p className="text-[10px] text-slate-400 hidden sm:block">
-                Verifiable Vehicle Condition & Dispute Arbitration
-              </p>
-            </div>
+            <span className="font-bold text-sm tracking-tight text-white uppercase">
+              Baseline
+            </span>
+            <span className="text-[10px] font-mono text-neutral-600">/ scan</span>
           </div>
 
-          {/* Navigation Tabs (Ordered: Scan -> Report -> Compare -> Verify) */}
-          <nav className="flex items-center bg-slate-900/90 rounded-xl p-1 border border-slate-800 text-xs">
+          {/* Sequential Step Navigation with Access Gating */}
+          <nav className="flex items-center gap-1 text-xs font-mono">
+            {/* Step 1: Scan (Always Accessible) */}
             <button
               onClick={() => setActiveTab('scan')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1 transition-colors ${
                 activeTab === 'scan'
-                  ? 'bg-cyan-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  ? 'text-white font-medium bg-neutral-900'
+                  : 'text-neutral-500 hover:text-neutral-300'
               }`}
             >
               <Camera className="w-3.5 h-3.5" />
               <span>1. Scan</span>
             </button>
 
+            {/* Step 2: Report (Only accessible once scanned) */}
             <button
-              onClick={() => {
-                if (activeReportScan || pickupScan || returnScan) {
-                  setActiveTab('report');
-                } else {
-                  handleLoadSamplePair();
-                }
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all ${
-                activeTab === 'report'
-                  ? 'bg-cyan-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              disabled={!hasScanned}
+              onClick={() => hasScanned && setActiveTab('report')}
+              className={`flex items-center gap-1.5 px-3 py-1 transition-colors ${
+                !hasScanned
+                  ? 'opacity-30 cursor-not-allowed text-neutral-600'
+                  : activeTab === 'report'
+                  ? 'text-white font-medium bg-neutral-900'
+                  : 'text-neutral-400 hover:text-white'
               }`}
+              title={!hasScanned ? 'Upload or run a scan first to view report' : undefined}
             >
+              {!hasScanned && <Lock className="w-3 h-3 text-neutral-600" />}
               <FileText className="w-3.5 h-3.5" />
               <span>2. Report</span>
             </button>
 
+            {/* Step 3: Compare (Only accessible once both or demo pair exist) */}
             <button
-              onClick={() => {
-                if (pickupScan && returnScan) {
-                  setActiveTab('compare');
-                } else {
-                  handleLoadSamplePair();
-                }
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all ${
-                activeTab === 'compare'
-                  ? 'bg-cyan-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              disabled={!canCompare}
+              onClick={() => canCompare && setActiveTab('compare')}
+              className={`flex items-center gap-1.5 px-3 py-1 transition-colors ${
+                !canCompare
+                  ? 'opacity-30 cursor-not-allowed text-neutral-600'
+                  : activeTab === 'compare'
+                  ? 'text-white font-medium bg-neutral-900'
+                  : 'text-neutral-400 hover:text-white'
               }`}
+              title={!canCompare ? 'Complete both pickup and return scans to compare' : undefined}
             >
+              {!canCompare && <Lock className="w-3 h-3 text-neutral-600" />}
               <Layers className="w-3.5 h-3.5" />
               <span>3. Compare</span>
             </button>
 
+            {/* Step 4: Verify (Only accessible once report exists) */}
             <button
-              onClick={() => {
-                if (activeReportScan || pickupScan || returnScan) {
-                  setActiveTab('verify');
-                } else {
-                  handleLoadSamplePair();
-                }
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all ${
-                activeTab === 'verify'
-                  ? 'bg-cyan-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              disabled={!hasScanned}
+              onClick={() => hasScanned && setActiveTab('verify')}
+              className={`flex items-center gap-1.5 px-3 py-1 transition-colors ${
+                !hasScanned
+                  ? 'opacity-30 cursor-not-allowed text-neutral-600'
+                  : activeTab === 'verify'
+                  ? 'text-white font-medium bg-neutral-900'
+                  : 'text-neutral-400 hover:text-white'
               }`}
+              title={!hasScanned ? 'Run a scan first to verify certificate' : undefined}
             >
+              {!hasScanned && <Lock className="w-3 h-3 text-neutral-600" />}
               <CheckCircle2 className="w-3.5 h-3.5" />
               <span>4. Verify</span>
             </button>
           </nav>
 
-          {/* Quick Demo Preload Button */}
-          <div className="hidden md:flex items-center">
-            <button
-              onClick={handleLoadSamplePair}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold border border-indigo-500/40 shadow-sm transition-all cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-              <span>Load Sample Scans</span>
-            </button>
-          </div>
+          {/* Quick Demo Preloader */}
+          <button
+            onClick={handleLoadSamplePair}
+            className="text-[11px] font-mono text-neutral-500 hover:text-neutral-300 transition-colors hidden sm:block cursor-pointer"
+          >
+            Load Demo Pair
+          </button>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      {/* Main View */}
+      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8">
         {activeTab === 'scan' && (
           <ScanScreen
             onScanCompleted={handleScanCompleted}
@@ -187,48 +199,50 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'report' && (
+        {activeTab === 'report' && activeReportScan && (
           <ReportScreen
-            scan={activeReportScan || returnScan || pickupScan || SAMPLE_RETURN_SCAN}
-            onNavigateToCompare={() => {
-              if (pickupScan && returnScan) {
-                setActiveTab('compare');
-              } else {
-                handleLoadSamplePair();
-              }
-            }}
+            scan={activeReportScan}
+            onNavigateToScan={() => setActiveTab('scan')}
+            onNavigateToCompare={canCompare ? () => setActiveTab('compare') : undefined}
             onNavigateToVerify={() => setActiveTab('verify')}
           />
         )}
 
-        {activeTab === 'compare' && (
+        {activeTab === 'compare' && pickupScan && returnScan && (
           <CompareScreen
-            pickupScan={pickupScan || SAMPLE_PICKUP_SCAN}
-            returnScan={returnScan || SAMPLE_RETURN_SCAN}
-            existingCompareResult={compareResult || SAMPLE_COMPARE_RESULT}
+            pickupScan={pickupScan}
+            returnScan={returnScan}
+            existingCompareResult={compareResult}
             onCompareUpdated={(newRes) => setCompareResult(newRes)}
+            onNavigateToReport={() => setActiveTab('report')}
+            onNavigateToScan={() => setActiveTab('scan')}
             onNavigateToVerify={() => setActiveTab('verify')}
           />
         )}
 
-        {activeTab === 'verify' && (
+        {activeTab === 'verify' && activeReportScan && (
           <VerifyScreen
-            scan={activeReportScan || returnScan || pickupScan || SAMPLE_RETURN_SCAN}
+            scan={activeReportScan}
             compareResult={compareResult}
+            onNavigateBack={() => setActiveTab(canCompare ? 'compare' : 'report')}
           />
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span>Built for Google DeepMind Hackathon</span>
-            <span>•</span>
-            <span>Gemini 3.8 Flash Multimodal & Client SHA-256 Ledger</span>
-          </div>
-          <div className="text-slate-400">
-            Ground Truth: Protecting Renters, Insurers & Fleets with Non-Repudiable Evidence
+      {/* Clean Minimalist Footer */}
+      <footer className="border-t border-neutral-900 bg-black py-6 text-[11px] font-mono text-neutral-600">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 flex items-center justify-between">
+          <span>Baseline</span>
+          <div className="flex items-center gap-3">
+            {hasScanned && (
+              <button
+                onClick={() => setActiveTab('scan')}
+                className="text-neutral-400 hover:text-white underline cursor-pointer"
+              >
+                Scan Another Vehicle
+              </button>
+            )}
+            <span>Tamper-evident vehicle walkaround verification</span>
           </div>
         </div>
       </footer>

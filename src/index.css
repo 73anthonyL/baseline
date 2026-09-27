@@ -1,1 +1,37 @@
 @import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #000000;
+    color: #e5e5e5;
+    font-family: 'Space Grotesk', -apple-system, sans-serif;
+    letter-spacing: -0.02em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'Space Mono', monospace;
+  }
+}
+
+/* Stripped-down minimalist borders (No gradients, no colored glows) */
+.border-subtle {
+  border: 1px solid #1c1c1c;
+}
+
+.border-line {
+  border: 1px solid #262626;
+}
+
+/* Minimalist scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #000000;
+}
+::-webkit-scrollbar-thumb {
+  background: #262626;
+}
