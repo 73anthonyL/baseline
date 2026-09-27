@@ -2,5 +2,7 @@
   "name": "GroundTruth Auto - Vehicle Condition Verification",
   "description": "Tamper-evident vehicle walkaround verification platform securing ground truth with randomized scan challenges, cryptographic SHA-256 anchoring, and Gemini-powered damage arbitration.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

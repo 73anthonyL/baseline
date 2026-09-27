@@ -1,7 +1,13 @@
 import React, { useState } from 'react';
 import { Panel, Direction, ScanRecord } from '../types';
 import { VehicleDiagram } from './VehicleDiagram';
-import { generateRandomChallenge, extractVideoKeyframes, computeFileSHA256 } from '../utils/videoUtils';
+import {
+  generateRandomChallenge,
+  extractVideoKeyframes,
+  computeFileSHA256,
+  isHeicFile,
+  convertHeicToJpeg,
+} from '../utils/videoUtils';
 import { UploadCloud, ShieldCheck, Film, AlertTriangle, ArrowRight, Loader2, Sparkles, CheckCircle2 } from 'lucide-react';
 
 interface ScanScreenProps {
@@ -26,23 +32,42 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    let file = e.target.files?.[0];
     if (!file) return;
 
-    // Client file validation
-    if (!file.type.startsWith('video/')) {
-      setErrorMsg('Please select a valid MP4 or MOV walkaround video file.');
+    setErrorMsg(null);
+
+    // If an HEIC image is uploaded (e.g. from iPhone camera roll), convert it to JPEG using browser canvas
+    if (isHeicFile(file)) {
+      try {
+        setProgressStage('Converting Apple HEIC image to high-compatibility JPEG in browser canvas...');
+        setIsProcessing(true);
+        file = await convertHeicToJpeg(file);
+        setIsProcessing(false);
+        setProgressStage('');
+      } catch (conversionErr: any) {
+        setIsProcessing(false);
+        setProgressStage('');
+        setErrorMsg('Could not convert HEIC format. Please export as standard JPEG or MP4.');
+        return;
+      }
+    }
+
+    // Client file validation (video or converted photo)
+    const isVideo = file.type.startsWith('video/');
+    const isImage = file.type.startsWith('image/');
+    if (!isVideo && !isImage) {
+      setErrorMsg('Please select a valid walkaround video or image file (MP4, MOV, WebM, JPEG, HEIC).');
       return;
     }
 
-    setErrorMsg(null);
     setSelectedFile(file);
     const objectUrl = URL.createObjectURL(file);
     setVideoPreviewUrl(objectUrl);
 
-    // Compute cryptographic SHA-256 on the client immediately
+    // Compute cryptographic SHA-256 on the client immediately on the converted/original file
     try {
-      setProgressStage('Anchoring cryptographic SHA-256 hash of original video...');
+      setProgressStage('Anchoring cryptographic SHA-256 hash of media...');
       const hash = await computeFileSHA256(file);
       setFileHash(hash);
       setProgressStage('');
@@ -61,11 +86,28 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
     setErrorMsg(null);
 
     try {
-      // Step 1: Extract 1fps keyframes capped at 30 frames, resized to 960px
-      setProgressStage('Extracting calibrated keyframes (1 fps, 960px optimized)...');
-      const { frames, duration } = await extractVideoKeyframes(selectedFile, 30, (pct) => {
-        setProgressPct(pct);
-      });
+      let frames: { timestamp_seconds: number; frame_index: number; dataUrl: string }[] = [];
+      let duration = 5;
+
+      if (selectedFile.type.startsWith('video/')) {
+        // Extract 1fps keyframes capped at 30 frames, resized to 960px
+        setProgressStage('Extracting calibrated keyframes (1 fps, 960px optimized)...');
+        const extracted = await extractVideoKeyframes(selectedFile, 30, (pct) => {
+          setProgressPct(pct);
+        });
+        frames = extracted.frames;
+        duration = extracted.duration;
+      } else {
+        // Converted HEIC or JPEG image: wrap single high-res frame into scan pipeline
+        setProgressStage('Optimizing converted image frame for Gemini analysis...');
+        const reader = new FileReader();
+        const dataUrl = await new Promise<string>((res) => {
+          reader.onload = () => res(reader.result as string);
+          reader.readAsDataURL(selectedFile);
+        });
+        frames = [{ timestamp_seconds: 0.5, frame_index: 0, dataUrl }];
+        duration = 1;
+      }
 
       // Step 2: Ensure SHA-256 is ready
       let finalHash = fileHash;
@@ -245,22 +287,22 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
                 <Film className="w-5 h-5 text-indigo-400" />
                 <h3 className="font-semibold text-white text-sm">Walkaround Video File</h3>
               </div>
-              <span className="text-xs text-slate-400">Max 2 min • MP4 / WebM / MOV</span>
+              <span className="text-xs text-slate-400">Max 2 min • MP4 / MOV / HEIC / JPEG</span>
             </div>
 
-            {/* Video File Dropzone / Uploader */}
+            {/* Video / Photo File Dropzone / Uploader */}
             {!videoPreviewUrl ? (
               <label className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-700 hover:border-cyan-500 rounded-xl bg-slate-950/50 cursor-pointer transition-colors group">
                 <UploadCloud className="w-12 h-12 text-slate-500 group-hover:text-cyan-400 mb-3 transition-colors" />
                 <span className="text-sm font-medium text-slate-200 group-hover:text-cyan-300">
-                  Select Walkaround Video
+                  Select Walkaround Video or Photo
                 </span>
                 <span className="text-xs text-slate-500 mt-1">
-                  Upload raw camera video from your mobile or laptop
+                  Upload raw camera video or Apple HEIC / JPEG photos from any device
                 </span>
                 <input
                   type="file"
-                  accept="video/mp4,video/webm,video/quicktime"
+                  accept="video/mp4,video/webm,video/quicktime,image/heic,image/heif,.heic,.heif,image/jpeg,image/png"
                   onChange={handleFileChange}
                   className="hidden"
                 />
@@ -268,20 +310,28 @@ export const ScanScreen: React.FC<ScanScreenProps> = ({ onScanCompleted, onLoadS
             ) : (
               <div className="space-y-3">
                 <div className="relative aspect-video rounded-lg overflow-hidden bg-black border border-slate-800">
-                  <video
-                    src={videoPreviewUrl}
-                    controls
-                    className="w-full h-full object-contain"
-                  />
+                  {selectedFile?.type.startsWith('video/') ? (
+                    <video
+                      src={videoPreviewUrl}
+                      controls
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <img
+                      src={videoPreviewUrl}
+                      alt="Uploaded scan preview"
+                      className="w-full h-full object-contain"
+                    />
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between text-xs text-slate-400">
                   <span>File: <strong className="text-slate-200">{selectedFile?.name}</strong></span>
                   <label className="text-cyan-400 hover:underline cursor-pointer">
-                    Change video
+                    Change media
                     <input
                       type="file"
-                      accept="video/mp4,video/webm,video/quicktime"
+                      accept="video/mp4,video/webm,video/quicktime,image/heic,image/heif,.heic,.heif,image/jpeg,image/png"
                       onChange={handleFileChange}
                       className="hidden"
                     />

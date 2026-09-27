@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ScanRecord, CompareResult } from '../types';
-import { computeFileSHA256 } from '../utils/videoUtils';
+import { computeFileSHA256, isHeicFile, convertHeicToJpeg } from '../utils/videoUtils';
 import {
   ShieldCheck,
   QrCode,
@@ -36,14 +36,18 @@ export const VerifyScreen: React.FC<VerifyScreenProps> = ({ scan, compareResult 
   };
 
   const handleReverifyUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    let file = e.target.files?.[0];
     if (!file) return;
 
-    setReverifyFile(file);
     setIsHashing(true);
     setReverifyMatch(null);
 
     try {
+      if (isHeicFile(file)) {
+        file = await convertHeicToJpeg(file);
+      }
+
+      setReverifyFile(file);
       const hash = await computeFileSHA256(file);
       setReverifyHash(hash);
 

@@ -1,4 +1,55 @@
 import { Panel, Direction, ScanRecord, CompareResult } from '../types';
+import heic2any from 'heic2any';
+
+// Helper to check if a file is HEIC/HEIF
+export function isHeicFile(file: File): boolean {
+  const fileName = file.name.toLowerCase();
+  const fileType = file.type.toLowerCase();
+  return (
+    fileName.endsWith('.heic') ||
+    fileName.endsWith('.heif') ||
+    fileType === 'image/heic' ||
+    fileType === 'image/heif'
+  );
+}
+
+// Convert HEIC file to JPEG using browser canvas & libheif/heic2any decoder
+export async function convertHeicToJpeg(file: File): Promise<File> {
+  try {
+    const conversionResult = await heic2any({
+      blob: file,
+      toType: 'image/jpeg',
+      quality: 0.88,
+    });
+
+    const blob = Array.isArray(conversionResult) ? conversionResult[0] : conversionResult;
+    const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
+
+    return new File([blob], newName, { type: 'image/jpeg' });
+  } catch (err) {
+    console.warn('heic2any fallback to canvas ImageBitmap:', err);
+    // Secondary fallback: test if browser natively supports createImageBitmap
+    try {
+      const bitmap = await createImageBitmap(file);
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas 2D context unavailable');
+      ctx.drawImage(bitmap, 0, 0);
+
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob(resolve, 'image/jpeg', 0.88);
+      });
+
+      if (!blob) throw new Error('Could not convert canvas to JPEG');
+      const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
+      return new File([blob], newName, { type: 'image/jpeg' });
+    } catch (fallbackErr) {
+      throw new Error(`Failed to convert HEIC to JPEG: ${fallbackErr || err}`);
+    }
+  }
+}
 
 // Helper to compute SHA-256 of any File or Blob
 export async function computeFileSHA256(file: File | Blob): Promise<string> {
